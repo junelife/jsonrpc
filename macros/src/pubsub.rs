@@ -51,14 +51,14 @@ impl<T, E> Subscriber<T, E> {
 pub struct Sink<T, E = core::Error> {
 	sink: pubsub::Sink,
 	id: SubscriptionId,
-	buffered: Option<core::Params>,
+	buffered: Option<(String, core::Params)>,
 	_data: PhantomData<(T, E)>,
 }
 
 impl<T: serde::Serialize, E: serde::Serialize> Sink<T, E> {
 	/// Sends a notification to the subscriber.
-	pub fn notify(&self, val: Result<T, E>) -> pubsub::SinkResult {
-		self.sink.notify(self.val_to_params(val))
+	pub fn notify(&self, name: &str, val: Result<T, E>) -> pubsub::SinkResult {
+		self.sink.notify(name, self.val_to_params(val))
 	}
 
 	fn val_to_params(&self, val: Result<T, E>) -> core::Params {
@@ -91,7 +91,7 @@ impl<T: serde::Serialize, E: serde::Serialize> Sink<T, E> {
 }
 
 impl<T: serde::Serialize, E: serde::Serialize> futures::sink::Sink for Sink<T, E> {
-	type SinkItem = Result<T, E>;
+	type SinkItem = (String, Result<T, E>);
 	type SinkError = pubsub::TransportError;
 
 	fn start_send(&mut self, item: Self::SinkItem) -> futures::StartSend<Self::SinkItem, Self::SinkError> {
@@ -101,9 +101,9 @@ impl<T: serde::Serialize, E: serde::Serialize> futures::sink::Sink for Sink<T, E
 		if self.poll()?.is_not_ready() {
 			return Ok(futures::AsyncSink::NotReady(item));
 		}
-
-		let val = self.val_to_params(item);
-		self.buffered = Some(val);
+		let (name, params) = item;
+		let val = self.val_to_params(params);
+		self.buffered = Some((name, val));
 		self.poll()?;
 
 		Ok(futures::AsyncSink::Ready)

@@ -5,6 +5,8 @@ extern crate jsonrpc_tcp_server;
 use std::{time, thread};
 use std::sync::Arc;
 
+use std::sync::mpsc::channel;
+
 use jsonrpc_core::*;
 use jsonrpc_pubsub::{PubSubHandler, PubSubMetadata, Session, Subscriber, SubscriptionId};
 use jsonrpc_tcp_server::{ServerBuilder, RequestContext};
@@ -45,7 +47,6 @@ fn main() {
 	});
 
 	io.add_subscription(
-		"hello",
 		("subscribe_hello", |params: Params, _, subscriber: Subscriber| {
 			if params != Params::None {
 				subscriber.reject(Error {
@@ -62,7 +63,7 @@ fn main() {
 			thread::spawn(move || {
 				loop {
 					thread::sleep(time::Duration::from_millis(100));
-					match sink.notify(Params::Array(vec![Value::Number(10.into())])).wait() {
+					match sink.notify("test", Params::Array(vec![Value::Number(10.into())])).wait() {
 						Ok(_) => {},
 						Err(_) => {
 							println!("Subscription has ended, finishing.");

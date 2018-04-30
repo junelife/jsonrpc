@@ -62,14 +62,13 @@ impl<T: PubSubMetadata, S: core::Middleware<T>> PubSubHandler<T, S> {
 	/// Adds new subscription.
 	pub fn add_subscription<F, G>(
 		&mut self,
-		notification: &str,
 		subscribe: (&str, F),
 		unsubscribe: (&str, G),
 	) where
 		F: SubscribeRpcMethod<T>,
 		G: UnsubscribeRpcMethod,
 	{
-		let (sub, unsub) = new_subscription(notification, subscribe.1, unsubscribe.1);
+		let (sub, unsub) = new_subscription(subscribe.1, unsubscribe.1);
 		self.handler.add_method_with_meta(subscribe.0, sub);
 		self.handler.add_method_with_meta(unsubscribe.0, unsub);
 	}
@@ -125,7 +124,6 @@ mod tests {
 		let called = Arc::new(AtomicBool::new(false));
 		let called2 = called.clone();
 		handler.add_subscription(
-			"hello",
 			("subscribe_hello", |params, _meta, subscriber: Subscriber| {
 				assert_eq!(params, core::Params::None);
 				let _sink = subscriber.assign_id(SubscriptionId::Number(5));

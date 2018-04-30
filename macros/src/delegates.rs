@@ -176,7 +176,6 @@ impl<T, M> IoDelegate<T, M> where
 	/// Adds subscription to the delegate.
 	pub fn add_subscription<Sub, Unsub, I>(
 		&mut self,
-		name: &str,
 		subscribe: (&str, Sub),
 		unsubscribe: (&str, Unsub),
 	) where
@@ -188,7 +187,6 @@ impl<T, M> IoDelegate<T, M> where
 		I::Future: Send + 'static,
 	{
 		let (sub, unsub) = jsonrpc_pubsub::new_subscription(
-			name,
 			DelegateSubscribe {
 				delegate: self.delegate.clone(),
 				closure: subscribe.1,

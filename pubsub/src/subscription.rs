@@ -15,7 +15,7 @@ use types::{PubSubMetadata, SubscriptionId, TransportSender, TransportError, Sin
 /// RPC client session
 /// Keeps track of active subscriptions and unsubscribes from them upon dropping.
 pub struct Session {
-	active_subscriptions: Mutex<HashMap<(SubscriptionId, String), Box<Fn(SubscriptionId) + Send + 'static>>>,
+	active_subscriptions: Mutex<HashMap<SubscriptionId, Box<Fn(SubscriptionId) + Send + 'static>>>,
 	transport: TransportSender,
 	on_drop: Mutex<Vec<Box<Fn() + Send>>>,
 }
@@ -51,10 +51,10 @@ impl Session {
 	}
 
 	/// Adds new active subscription
-	fn add_subscription<F>(&self, name: &str, id: &SubscriptionId, remove: F) where
+	fn add_subscription<F>(&self, id: &SubscriptionId, remove: F) where
 		F: Fn(SubscriptionId) + Send + 'static,
 	{
-		let ret = self.active_subscriptions.lock().insert((id.clone(), name.into()), Box::new(remove));
+		let ret = self.active_subscriptions.lock().insert(id.clone(), Box::new(remove));
 		if let Some(remove) = ret {
 			warn!("SubscriptionId collision. Unsubscribing previous client.");
 			remove(id.clone());
@@ -62,8 +62,8 @@ impl Session {
 	}
 
 	/// Removes existing subscription.
-	fn remove_subscription(&self, name: &str, id: &SubscriptionId) {
-		self.active_subscriptions.lock().remove(&(id.clone(), name.into()));
+	fn remove_subscription(&self, id: &SubscriptionId) {
+		self.active_subscriptions.lock().remove(&id.clone());
 	}
 }
 
@@ -71,7 +71,7 @@ impl Drop for Session {
 	fn drop(&mut self) {
 		let mut active = self.active_subscriptions.lock();
 		for (id, remove) in active.drain() {
-			remove(id.0)
+			remove(id)
 		}
 
 		let mut on_drop = self.on_drop.lock();
@@ -84,21 +84,20 @@ impl Drop for Session {
 /// A handle to send notifications directly to subscribed client.
 #[derive(Debug, Clone)]
 pub struct Sink {
-	notification: String,
 	transport: TransportSender,
 }
 
 impl Sink {
 	/// Sends a notification to a client.
-	pub fn notify(&self, val: core::Params) -> SinkResult {
-		let val = self.params_to_string(val);
+	pub fn notify(&self, notification: &str, val: core::Params) -> SinkResult {
+		let val = self.params_to_string(notification, val);
 		self.transport.clone().send(val.0)
 	}
 
-	fn params_to_string(&self, val: core::Params) -> (String, core::Params) {
+	fn params_to_string(&self, notification_name: &str, val: core::Params) -> (String, core::Params) {
 		let notification = core::Notification {
 			jsonrpc: Some(core::Version::V2),
-			method: self.notification.clone(),
+			method: notification_name.to_string(),
 			params: Some(val),
 		};
 		(
@@ -109,14 +108,15 @@ impl Sink {
 }
 
 impl FuturesSink for Sink {
-	type SinkItem = core::Params;
+	type SinkItem = (String, core::Params);
 	type SinkError = TransportError;
 
 	fn start_send(&mut self, item: Self::SinkItem) -> futures::StartSend<Self::SinkItem, Self::SinkError> {
-		let (val, params) = self.params_to_string(item);
+		let (notification, params) = item;
+		let (val, params) = self.params_to_string(&notification, params);
 		self.transport.start_send(val).map(|result| match result {
 			futures::AsyncSink::Ready => futures::AsyncSink::Ready,
-			futures::AsyncSink::NotReady(_) => futures::AsyncSink::NotReady(params),
+			futures::AsyncSink::NotReady(_) => futures::AsyncSink::NotReady((notification, params)),
 		})
 	}
 
@@ -133,7 +133,6 @@ impl FuturesSink for Sink {
 /// Subscription handlers can either reject this subscription request or assign an unique id.
 #[derive(Debug)]
 pub struct Subscriber {
-	notification: String,
 	transport: TransportSender,
 	sender: oneshot::Sender<Result<SubscriptionId, core::Error>>,
 }
@@ -145,7 +144,6 @@ impl Subscriber {
 		self.sender.send(Ok(id)).map_err(|_| ())?;
 
 		Ok(Sink {
-			notification: self.notification,
 			transport: self.transport,
 		})
 	}
@@ -160,20 +158,18 @@ impl Subscriber {
 
 
 /// Creates new subscribe and unsubscribe RPC methods
-pub fn new_subscription<M, F, G>(notification: &str, subscribe: F, unsubscribe: G) -> (Subscribe<F, G>, Unsubscribe<G>) where
+pub fn new_subscription<M, F, G>(subscribe: F, unsubscribe: G) -> (Subscribe<F, G>, Unsubscribe<G>) where
 	M: PubSubMetadata,
 	F: SubscribeRpcMethod<M>,
 	G: UnsubscribeRpcMethod,
 {
 	let unsubscribe = Arc::new(unsubscribe);
 	let subscribe = Subscribe {
-		notification: notification.to_owned(),
 		subscribe: subscribe,
 		unsubscribe: unsubscribe.clone(),
 	};
 
 	let unsubscribe = Unsubscribe {
-		notification: notification.into(),
 		unsubscribe: unsubscribe,
 	};
 
@@ -198,7 +194,6 @@ fn subscriptions_unavailable() -> core::Error {
 
 /// Subscribe RPC implementation.
 pub struct Subscribe<F, G> {
-	notification: String,
 	subscribe: F,
 	unsubscribe: Arc<G>,
 }
@@ -215,20 +210,18 @@ impl<M, F, G> core::RpcMethod<M> for Subscribe<F, G> where
 
 				// Register the subscription
 				let subscriber = Subscriber {
-					notification: self.notification.clone(),
 					transport: session.sender(),
 					sender: tx,
 				};
 				self.subscribe.call(params, meta, subscriber);
 
 				let unsub = self.unsubscribe.clone();
-				let notification = self.notification.clone();
 				let subscribe_future = rx
 					.map_err(|_| subscription_rejected())
 					.and_then(move |result| {
 						futures::done(match result {
 							Ok(id) => {
-								session.add_subscription(&notification, &id, move |id| {
+								session.add_subscription(&id, move |id| {
 									let _ = unsub.call(id).wait();
 								});
 								Ok(id.into())
@@ -245,7 +238,6 @@ impl<M, F, G> core::RpcMethod<M> for Subscribe<F, G> where
 
 /// Unsubscribe RPC implementation.
 pub struct Unsubscribe<G> {
-	notification: String,
 	unsubscribe: Arc<G>,
 }
 
@@ -262,7 +254,7 @@ impl<M, G> core::RpcMethod<M> for Unsubscribe<G> where
 		};
 		match (meta.session(), id) {
 			(Some(session), Some(id)) => {
-				session.remove_subscription(&self.notification, &id);
+				session.remove_subscription(&id);
 				Box::new(self.unsubscribe.call(id))
 			},
 			(Some(_), None) => Box::new(future::err(core::Error::invalid_params("Expected subscription id."))),
@@ -295,7 +287,7 @@ mod tests {
 		let called = Arc::new(AtomicBool::new(false));
 		let called2 = called.clone();
 		let session = session().0;
-		session.add_subscription("test", &id, move |id| {
+		session.add_subscription(&id, move |id| {
 			assert_eq!(id, SubscriptionId::Number(1));
 			called2.store(true, Ordering::SeqCst);
 		});
@@ -314,13 +306,13 @@ mod tests {
 		let called = Arc::new(AtomicBool::new(false));
 		let called2 = called.clone();
 		let session = session().0;
-		session.add_subscription("test", &id, move |id| {
+		session.add_subscription(&id, move |id| {
 			assert_eq!(id, SubscriptionId::Number(1));
 			called2.store(true, Ordering::SeqCst);
 		});
 
 		// when
-		session.remove_subscription("test", &id);
+		session.remove_subscription(&id);
 		drop(session);
 
 		// then
@@ -334,13 +326,13 @@ mod tests {
 		let called = Arc::new(AtomicBool::new(false));
 		let called2 = called.clone();
 		let session = session().0;
-		session.add_subscription("test", &id, move |id| {
+		session.add_subscription(&id, move |id| {
 			assert_eq!(id, SubscriptionId::Number(1));
 			called2.store(true, Ordering::SeqCst);
 		});
 
 		// when
-		session.add_subscription("test", &id, |_| {});
+		session.add_subscription(&id, |_| {});
 
 		// then
 		assert_eq!(called.load(Ordering::SeqCst), true);
@@ -351,12 +343,11 @@ mod tests {
 		// given
 		let (tx, mut rx) = mpsc::channel(1);
 		let sink = Sink {
-			notification: "test".into(),
 			transport: tx,
 		};
 
 		// when
-		sink.notify(core::Params::Array(vec![core::Value::Number(10.into())])).wait().unwrap();
+		sink.notify("test", core::Params::Array(vec![core::Value::Number(10.into())])).wait().unwrap();
 
 		// then
 		assert_eq!(
@@ -371,7 +362,6 @@ mod tests {
 		let (transport, _) = mpsc::channel(1);
 		let (tx, mut rx) = oneshot::channel();
 		let subscriber = Subscriber {
-			notification: "test".into(),
 			transport: transport,
 			sender: tx,
 		};
@@ -384,7 +374,6 @@ mod tests {
 			rx.poll().unwrap(),
 			Async::Ready(Ok(SubscriptionId::Number(5)))
 		);
-		assert_eq!(sink.notification, "test".to_owned());
 	}
 
 	#[test]
@@ -393,7 +382,6 @@ mod tests {
 		let (transport, _) = mpsc::channel(1);
 		let (tx, mut rx) = oneshot::channel();
 		let subscriber = Subscriber {
-			notification: "test".into(),
 			transport: transport,
 			sender: tx,
 		};
@@ -428,7 +416,6 @@ mod tests {
 		let called = Arc::new(AtomicBool::new(false));
 		let called2 = called.clone();
 		let (subscribe, _) = new_subscription(
-			"test".into(),
 			move |params, _meta, _subscriber| {
 				assert_eq!(params, core::Params::None);
 				called2.store(true, Ordering::SeqCst);
