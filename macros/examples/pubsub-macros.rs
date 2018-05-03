@@ -34,7 +34,7 @@ build_rpc_trait! {
 		#[rpc(name = "add")]
 		fn add(&self, u64, u64) -> Result<u64>;
 
-		#[pubsub(name = "hello")] {
+		#[pubsub] {
 			/// Hello subscription
 			#[rpc(name = "hello_subscribe", alias = ["hello_sub", ])]
 			fn subscribe(&self, Self::Metadata, pubsub::Subscriber<String>, u64);
@@ -99,7 +99,7 @@ fn main() {
 			{
 				let subscribers = active_subscriptions.read().unwrap();
 				for sink in subscribers.values() {
-					let _ = sink.notify(Ok("Hello World!".into())).wait();
+					let _ = sink.notify("hello", "Hello World!".to_string()).wait();
 				}
 			}
 			thread::sleep(::std::time::Duration::from_secs(1));

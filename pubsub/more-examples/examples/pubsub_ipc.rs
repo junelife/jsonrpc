@@ -45,7 +45,6 @@ fn main() {
 	});
 
 	io.add_subscription(
-		"hello",
 		("subscribe_hello", |params: Params, _, subscriber: Subscriber| {
 			if params != Params::None {
 				subscriber.reject(Error {
@@ -62,7 +61,7 @@ fn main() {
 			thread::spawn(move || {
 				loop {
 					thread::sleep(time::Duration::from_millis(100));
-					match sink.notify(Params::Array(vec![Value::Number(10.into())])).wait() {
+					match sink.notify("hello", Params::Array(vec![Value::Number(10.into())])).wait() {
 						Ok(_) => {},
 						Err(_) => {
 							println!("Subscription has ended, finishing.");

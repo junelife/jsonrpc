@@ -13,12 +13,12 @@ pub use self::pubsub::SubscriptionId;
 
 /// New PUB-SUB subcriber.
 #[derive(Debug)]
-pub struct Subscriber<T, E = core::Error> {
+pub struct Subscriber<T> {
 	subscriber: pubsub::Subscriber,
-	_data: PhantomData<(T, E)>,
+	_data: PhantomData<T>,
 }
 
-impl<T, E> Subscriber<T, E> {
+impl<T> Subscriber<T> {
 	/// Wrap non-typed subscriber.
 	pub fn new(subscriber: pubsub::Subscriber) -> Self {
 		Subscriber {
@@ -35,7 +35,7 @@ impl<T, E> Subscriber<T, E> {
 	/// Assign id to this subscriber.
 	/// This method consumes `Subscriber` and returns `Sink`
 	/// if the connection is still open or error otherwise.
-	pub fn assign_id(self, id: SubscriptionId) -> Result<Sink<T, E>, ()> {
+	pub fn assign_id(self, id: SubscriptionId) -> Result<Sink<T>, ()> {
 		let sink = self.subscriber.assign_id(id.clone())?;
 		Ok(Sink {
 			id: id,
@@ -48,30 +48,22 @@ impl<T, E> Subscriber<T, E> {
 
 /// Subscriber sink.
 #[derive(Debug, Clone)]
-pub struct Sink<T, E = core::Error> {
+pub struct Sink<T> {
 	sink: pubsub::Sink,
 	id: SubscriptionId,
 	buffered: Option<(String, core::Params)>,
-	_data: PhantomData<(T, E)>,
+	_data: PhantomData<T>,
 }
 
-impl<T: serde::Serialize, E: serde::Serialize> Sink<T, E> {
+impl<T: serde::Serialize> Sink<T> {
 	/// Sends a notification to the subscriber.
-	pub fn notify(&self, name: &str, val: Result<T, E>) -> pubsub::SinkResult {
+	pub fn notify(&self, name: &str, val: T) -> pubsub::SinkResult {
 		self.sink.notify(name, self.val_to_params(val))
 	}
 
-	fn val_to_params(&self, val: Result<T, E>) -> core::Params {
-		let id = self.id.clone().into();
-		let val = val.map(to_value).map_err(to_value);
+	fn val_to_params(&self, val: T) -> core::Params {
 
-		core::Params::Map(vec![
-			("subscription".to_owned(), id),
-			match val {
-				Ok(val) => ("result".to_owned(), val),
-				Err(err) => ("error".to_owned(), err),
-			},
-		].into_iter().collect())
+		core::Params::Array(vec![to_value(val)])
 	}
 
 	fn poll(&mut self) -> futures::Poll<(), pubsub::TransportError> {
@@ -90,8 +82,8 @@ impl<T: serde::Serialize, E: serde::Serialize> Sink<T, E> {
 	}
 }
 
-impl<T: serde::Serialize, E: serde::Serialize> futures::sink::Sink for Sink<T, E> {
-	type SinkItem = (String, Result<T, E>);
+impl<T: serde::Serialize> futures::sink::Sink for Sink<T> {
+	type SinkItem = (String, T);
 	type SinkError = pubsub::TransportError;
 
 	fn start_send(&mut self, item: Self::SinkItem) -> futures::StartSend<Self::SinkItem, Self::SinkError> {

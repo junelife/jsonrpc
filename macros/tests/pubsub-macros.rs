@@ -14,7 +14,7 @@ build_rpc_trait! {
 	pub trait Rpc {
 		type Metadata;
 
-		#[pubsub(name = "hello")] {
+		#[pubsub] {
 			/// Hello subscription
 			#[rpc(name = "hello_subscribe")]
 			fn subscribe(&self, Self::Metadata, pubsub::Subscriber<String>, u32, Trailing<u64>);

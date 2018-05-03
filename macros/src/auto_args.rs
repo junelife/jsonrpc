@@ -118,7 +118,7 @@ macro_rules! build_rpc_trait {
 			)*
 
 			$(
-				#[ pubsub( $($pubsub_t:tt)+ ) ] {
+				#[ pubsub ] {
 					$( #[ doc= $sub_doc:expr ] )*
 					#[ rpc( $($sub_t:tt)* ) ]
 					fn $sub_name: ident ( $($sub_p: tt)* );
@@ -161,7 +161,6 @@ macro_rules! build_rpc_trait {
 				)*
 				$(
 					build_rpc_trait!(WRAP del =>
-						pubsub: ( $($pubsub_t)* )
 						subscribe: ( $($sub_t)* )
 						fn $sub_name ( $($sub_p)* );
 						unsubscribe: ( $($unsub_t)* )
@@ -202,14 +201,12 @@ macro_rules! build_rpc_trait {
 	};
 
 	( WRAP $del: expr =>
-		pubsub: (name = $name: expr)
 		subscribe: (name = $subscribe: expr $(, alias = [ $( $sub_alias: expr, )+ ])*)
 		fn $sub_method: ident (&self, Self::Metadata $(, $sub_p: ty)+);
 		unsubscribe: (name = $unsubscribe: expr $(, alias = [ $( $unsub_alias: expr, )+ ])*)
 		fn $unsub_method: ident (&self $(, $unsub_p: ty)+) -> $result: tt <$out: ty $(, $error_unsub: ty)* >;
 	) => {
 		$del.add_subscription(
-			$name,
 			($subscribe, move |base, params, meta, subscriber| {
 				$crate::WrapSubscribe::wrap_rpc(
 					&(Self::$sub_method as fn(&_, Self::Metadata $(, $sub_p)*)),
